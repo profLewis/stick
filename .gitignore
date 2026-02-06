@@ -9,3 +9,6 @@ build/
 .venv/
 venv/
 .env
+
+# Downloaded dependencies (not authored)
+firmware/lib/sdcard.py
