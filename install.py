@@ -32,6 +32,7 @@ FIRMWARE_FILES = [
     ("lib/notes.py", ":lib/notes.py"),
     ("lib/midi.py", ":lib/midi.py"),
     ("lib/sdcard.py", ":lib/sdcard.py"),
+    ("lib/tca9548a.py", ":lib/tca9548a.py"),
 ]
 
 

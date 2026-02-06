@@ -6,33 +6,113 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 
 1. **Raspberry Pi Pico 2** (RP2350) — 4 MB flash
 2. **[Seengreat Pico Expansion Mini Rev 2.1](https://seengreat.com/wiki/167/pico-expansion-mini)** — buzzer, SD card, RGB LED, Grove connectors
+3. **TCA9548A V1.0** — I2C multiplexer hub for sensor routing
+4. **PCF8574** — I2C GPIO expander (behind TCA9548A channel 0)
+
+## Board Layout
+
+```
+  Seengreat Pico Expansion Mini Rev 2.1
+  ┌─────────────────────────────────────────────────────────┐
+  │                                                         │
+  │  [Grove 1]     [Grove 2]     [Grove 3]                  │
+  │  GP0/GP1       GP2/GP3       GP10/GP11                  │
+  │  MIDI OUT      (free)        (SD card aux)              │
+  │                                                         │
+  │  ┌───────────────────────────────────────┐   ┌───────┐  │
+  │  │                                       │   │ SD    │  │
+  │  │       Raspberry Pi Pico 2             │   │ Card  │  │
+  │  │           (RP2350)                    │   │ Slot  │  │
+  │  │                                       │   │       │  │
+  │  │  USB-C                                │   │ SPI1  │  │
+  │  └───┤   ├───────────────────────────────┘   └───────┘  │
+  │                                                         │
+  │  [Grove 4]     [Grove 5]     [Grove 6]     🔊   🟢     │
+  │  GP16/GP17     GP18/GP19     GP20/GP21     BUZ  RGB     │
+  │  (free)        (buzzer)      I2C0→TCA                   │
+  │                                                         │
+  │  [K1]  [K2]                                             │
+  └─────────────────────────────────────────────────────────┘
+```
 
 ## Pin Allocation
 
-| Module | GPIOs | Notes |
-|--------|-------|-------|
-| Buzzer (PWM) | GP18 | Passive buzzer, BUZZER_SW jumper ON |
-| SD Card (SPI1) | GP14 SCK, GP15 MOSI, GP12 MISO, GP13 CS | FAT32 formatted |
-| RGB LED (WS2812) | GP22 | Status indicator |
-| MIDI Out (UART0) | GP0 TX | Grove 1, 31250 baud |
-| Piezo S1a | GP16 | Grove 4 pin 1 |
-| Piezo S1b | GP17 | Grove 4 pin 2 |
-| RTC (DS1302) | GP6, GP7, GP8 | Not used yet |
+| Module | GPIOs | Connector | Notes |
+|--------|-------|-----------|-------|
+| MIDI Out (UART0) | GP0 TX | Grove 1 | 31250 baud, DIN-5 connector |
+| SD Card (SPI1) | GP14 SCK, GP15 MOSI, GP12 MISO, GP13 CS | Built-in slot | FAT32 |
+| Buzzer (PWM) | GP18 | Built-in | Passive, BUZZER_SW jumper ON |
+| I2C0 → TCA9548A | GP20 SDA, GP21 SCL | Grove 6 | Sensor hub |
+| RGB LED (WS2812) | GP22 | Built-in | Status indicator |
+| RTC (DS1302) | GP6, GP7, GP8 | Built-in | Not used yet |
 
 ### Available for expansion
 
-| Grove | GPIOs | Use |
-|-------|-------|-----|
-| 2 | GP2, GP3 | Sensors or I2C |
-| 6 | GP20, GP21 | Sensors |
-
-Up to 4 more digital triggers (2 more sensor pairs).
+| Grove | GPIOs | Status |
+|-------|-------|--------|
+| 2 | GP2, GP3 | Free |
+| 4 | GP16, GP17 | Free |
 
 ### Pin conflicts
 
-- GP18: shared by buzzer, audio module, and Grove 5. Only use one at a time.
-- GP10/GP11: shared by SD card block and Grove 3. Don't use Grove 3 while SD is active.
-- GP0/GP1: reserved for MIDI UART.
+- **GP18**: shared by buzzer, audio module, and Grove 5. Only use one at a time.
+- **GP10/GP11**: shared by SD card block and Grove 3. Don't use Grove 3 while SD is active.
+- **GP0/GP1**: reserved for MIDI UART.
+- **GP20/GP21**: reserved for I2C0 to TCA9548A.
+
+## Wiring Diagram
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Seengreat Pico Expansion Mini                                   │
+  │                                                                 │
+  │  Grove 1 (GP0/GP1)                                              │
+  │  ├── 3.3V ──[220Ω]──→ DIN-5 Pin 4 ─┐                          │
+  │  ├── GP0  ──[220Ω]──→ DIN-5 Pin 5  ├── MIDI OUT                │
+  │  └── GND  ──────────→ DIN-5 Pin 2 ─┘   (to synth/player)      │
+  │                                                                 │
+  │  Grove 6 (GP20/GP21)                                            │
+  │  ├── GP20 (SDA) ────┐                                          │
+  │  ├── GP21 (SCL) ──┐ │                                          │
+  │  ├── 3.3V ───────┐│ │                                          │
+  │  └── GND  ──────┐││ │                                          │
+  │                  ││││                                           │
+  │                  ▼▼▼▼                                           │
+  │           ┌──────────────┐                                      │
+  │           │ TCA9548A V1.0│                                      │
+  │           │  I2C Hub     │                                      │
+  │           │  addr: 0x70  │                                      │
+  │           ├──────────────┤                                      │
+  │           │ Ch 0 (I2C0)  │──→ PCF8574 (0x20) ──→ S1a (P0)     │
+  │           │              │                   ──→ S1b (P1)      │
+  │           │ Ch 1         │    (available)                       │
+  │           │ Ch 2         │    (available)                       │
+  │           │  ...         │                                      │
+  │           │ Ch 7         │    (available)                       │
+  │           └──────────────┘                                      │
+  │                                                                 │
+  │  Built-in                                                       │
+  │  ├── Buzzer (GP18 PWM) ── BUZZER_SW jumper ON                   │
+  │  ├── SD Card (SPI1)    ── FAT32 micro SD                       │
+  │  └── RGB LED (GP22)    ── WS2812 status                        │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+### Sensor wiring detail
+
+```
+Piezo sensor ──→ comparator board ──→ PCF8574 GPIO expander
+                                       │
+                 S1a digital ──────→ P0 (bit 0, active-low)
+                 S1b digital ──────→ P1 (bit 1, active-low)
+                                       │
+                         I2C (SDA/SCL) ─┘
+                              │
+                    TCA9548A channel 0
+                              │
+                    I2C0 (GP20/GP21) on Pico
+```
 
 ## MIDI Out Wiring
 
@@ -46,6 +126,23 @@ Pico GP0  --[220 ohm]--> DIN-5 Pin 5
 ```
 
 Pin numbering viewed from solder side of connector. Two 220-ohm resistors and a DIN-5 female connector are all you need.
+
+## Sensors
+
+Piezo sensors with digital trigger output, routed through I2C:
+
+| Sensor | TCA9548A Ch | PCF8574 Pin | Default Note |
+|--------|-------------|-------------|-------------|
+| S1a | 0 | P0 | A4 (440 Hz) |
+| S1b | 0 | P1 | C5 (523 Hz) |
+
+Edit `SENSOR_MAP` in `firmware/main.py` to change note assignments.
+
+Rising-edge detection with 50ms debounce. PCF8574 inputs are active-low (sensor trigger pulls pin LOW).
+
+### Adding more sensors
+
+The TCA9548A has 8 channels. Add more PCF8574 expanders on other channels for additional sensor pairs. Each PCF8574 provides 8 digital inputs.
 
 ## Disk Space
 
@@ -72,6 +169,7 @@ stick/
     lib/
       notes.py            #   Note name -> frequency + MIDI number
       midi.py             #   MidiOut class (UART 31250 baud)
+      tca9548a.py         #   TCA9548A I2C mux driver
       sdcard.py           #   micropython-lib SD driver (auto-downloaded)
   archive/
     main_i2s.py           # Old I2S firmware (Waveshare Audio HAT)
@@ -113,16 +211,3 @@ python install.py --sd-path /Volumes/SD
 
 - **BUZZER_SW**: ON (connect jumper cap)
 - **Grove VCC**: 3.3V
-
-## Sensors
-
-Piezo sensors with digital trigger output, wired in pairs:
-
-| Sensor | GPIO | Default Note |
-|--------|------|-------------|
-| S1a | GP16 | A4 (440 Hz) |
-| S1b | GP17 | C5 (523 Hz) |
-
-Edit `SENSOR_MAP` in `firmware/main.py` to change note assignments.
-
-Uses rising-edge detection with pull-down resistors and 50ms debounce.
