@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "stick"
+name = "soundGarden"
 version = "0.1.0"
-description = "Plays sounds when triggered by piezo sensors"
+description = "MIDI-triggered WAV playback on RPi Pico 2 + Waveshare Pico Audio"
 requires-python = ">=3.8"

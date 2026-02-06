@@ -9,9 +9,3 @@ build/
 .venv/
 venv/
 .env
-
-# Downloaded dependencies (not authored)
-firmware/lib/sdcard.py
-
-# Generated octave-shifted WAV files
-sounds_source/*_synth.wav
