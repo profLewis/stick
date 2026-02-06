@@ -84,7 +84,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
   │           │  I2C Hub     │                                      │
   │           │  addr: 0x70  │                                      │
   │           ├──────────────┤                                      │
-  │           │ Ch 0         │──→ SDA wire ──→ S1a D0 (active-low) │
+  │           │ Ch 0         │──→ SDA wire ──→ S1a D0 (active-HIGH) │
   │           │              │──→ SCL wire ──→ S1b D0              │
   │           │ Ch 1         │    (available)                       │
   │           │ Ch 2         │    (available)                       │
@@ -103,7 +103,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 ### Sensor wiring detail
 
 ```
-Piezo ──→ A2D comparator board ──→ D0 output (active-low)
+Piezo ──→ A2D comparator board ──→ D0 output (active-HIGH)
 
 Channel 0:                           Channel 1:
   Sensor A D0 ──→ SDA wire             Sensor A D0 ──→ SDA wire
@@ -141,12 +141,24 @@ and a DIN-5 female connector are all you need.
 Sensor-to-sound mappings are defined in `firmware/sensors.cfg`:
 
 ```
-# Format:  hub_addr  channel  pin  sound
-0x70  0  A  C4
-0x70  0  B  E4
-0x70  1  A  G4
-0x70  1  B  C5
+# Direct GPIO (sensors wired to Pico pins):
+gpio  16  C4
+gpio  17  E4
+
+# TCA9548A hub (sensors via I2C mux):
+0x70  0  A  G4
+0x70  0  B  C5
 ```
+
+**Direct GPIO mode:**
+
+| Field | Description |
+|-------|-------------|
+| `gpio` | Keyword for direct GPIO mode |
+| pin | Pico GPIO pin number |
+| `sound` | Note name from `lib/notes.py` (C4-E6) |
+
+**TCA9548A hub mode:**
 
 | Field | Description |
 |-------|-------------|
@@ -160,12 +172,15 @@ to `sensors.cfg` on internal flash. Lines starting with `#` are comments.
 
 ### Sensors
 
-Piezo sensors with A2D comparator boards (GND, VCC, AD0, D0). The D0 digital
-output is routed through the TCA9548A used as a digital signal multiplexer:
+Piezo sensors with A2D comparator boards (GND, VCC, AD0, D0). D0 is
+**active-HIGH**: normally LOW, goes HIGH on hit.
 
-- Each TCA9548A channel carries **2 sensor D0 lines**
-- SDA wire = sensor A (D0), SCL wire = sensor B (D0)
-- D0 is **active-low**: 0 = hit, 1 = idle
+**Important:** At 3.3V, these A2D boards need a **~10K pull-down resistor**
+between D0 and GND. Without it, D0 floats HIGH and won't trigger correctly.
+The boards are designed for 5V; at 3.3V the comparator threshold is marginal.
+
+Sensors can be wired directly to GPIO pins (simplest) or through a TCA9548A
+I2C multiplexer for more channels.
 
 Rising-edge detection with 50ms debounce. On boot, a status report shows all
 configured sensors and their current state (IDLE/TRIGGERED).
@@ -299,11 +314,21 @@ matching WAV file. If a note is missing (e.g. `C3.wav`), it will try to
 generate one by octave-shifting from an existing file (e.g. `C4.wav`).
 Generated files are named with a `_synth` suffix (e.g. `C3_synth.wav`).
 
-## Boot Test Tune
+## Boot Tune
 
-On every power-up, after mounting the SD card, the Pico plays the Tetris theme
-(Korobeiniki) through both the **buzzer** (GP18) and the **audio jack** (GP19).
-This confirms audio output is working. The tune plays before `main.py` starts.
+On every power-up, after mounting the SD card, the Pico plays a tune through
+both the **buzzer** (GP18) and the **audio jack** (GP19). Three tunes are
+available: **Tetris** (Korobeiniki), **In the Mood** (Glenn Miller), and
+**Star Wars** (Main Theme). By default one is chosen at random.
+
+To set a specific tune, add to `sensors.cfg`:
+```
+boot_tune  tetris
+```
+Options: `tetris`, `mood`, `starwars`, `random` (default).
+
+Boot tune melodies are derived from MIDI files on
+[midis101.com](https://www.midis101.com).
 
 ## Jumper Settings
 

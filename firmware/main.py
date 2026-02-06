@@ -57,40 +57,6 @@ def set_rgb(r, g, b):
     rgb.write()
 
 
-# ---- RGB color helpers ----
-def hsv_to_rgb(h, s, v):
-    """Convert HSV (0-255 each) to (r, g, b) tuple."""
-    if s == 0:
-        return v, v, v
-    region = h // 43
-    remainder = (h - region * 43) * 6
-    p = (v * (255 - s)) >> 8
-    q = (v * (255 - ((s * remainder) >> 8))) >> 8
-    t = (v * (255 - ((s * (255 - remainder)) >> 8))) >> 8
-    if region == 0:
-        return v, t, p
-    if region == 1:
-        return q, v, p
-    if region == 2:
-        return p, v, t
-    if region == 3:
-        return p, q, v
-    if region == 4:
-        return t, p, v
-    return v, p, q
-
-
-# Each chromatic note (C=0 .. B=11) maps to a hue on the color wheel
-NOTE_HUES = [0, 21, 43, 64, 85, 107, 128, 149, 170, 192, 213, 234]
-
-
-def note_color(midi_num, brightness=255):
-    """Map a MIDI note number to an RGB color. Returns (r, g, b)."""
-    chroma = midi_num % 12
-    hue = NOTE_HUES[chroma]
-    return hsv_to_rgb(hue, 255, brightness)
-
-
 # ---- MIDI output ----
 midi = MidiOut(uart_id=0, tx_pin=0, channel=0)
 
@@ -100,33 +66,29 @@ ANIM_STEP_MS = 10
 
 # ---- Tone helpers ----
 def play_tone_with_rgb(frequency_hz, duration_ms, midi_num):
-    """Play a tone on buzzer + audio jack with animated RGB."""
-    r0, g0, b0 = note_color(midi_num, 255)
-    steps = max(1, duration_ms // ANIM_STEP_MS)
+    """Play a tone on buzzer + audio jack with animated RGB.
+
+    Red flash on hit, then green=note identity, blue=fading intensity.
+    """
+    # Map note to green channel (C4=60 -> 0, E6=88 -> 255)
+    green = min(255, max(0, (midi_num - 60) * 9))
 
     buzzer.freq(int(frequency_hz))
     audio.freq(int(frequency_hz))
     buzzer.duty_u16(32768)
     audio.duty_u16(32768)
 
-    # White flash on initial impact (20ms)
-    set_rgb(255, 255, 255)
+    # Red flash on initial impact (20ms)
+    set_rgb(255, 0, 0)
     time.sleep_ms(min(20, duration_ms))
     remaining = duration_ms - 20
 
     if remaining > 0:
         steps = max(1, remaining // ANIM_STEP_MS)
         for i in range(steps):
-            # Progress 0.0 -> 1.0
-            t = (i * 256) // steps
-
-            # Fade from full brightness to off, with hue shimmer
-            bright = 255 - ((t * 200) >> 8)  # 255 -> 55
-            shimmer = (t * 30) >> 8  # hue shifts slightly
-            hue = (NOTE_HUES[midi_num % 12] + shimmer) & 0xFF
-
-            r, g, b = hsv_to_rgb(hue, 255, bright)
-            set_rgb(r, g, b)
+            # Blue = intensity, fades from 255 to 0
+            blue = 255 - ((i * 255) // steps)
+            set_rgb(0, green, blue)
             time.sleep_ms(ANIM_STEP_MS)
 
     buzzer.duty_u16(0)
