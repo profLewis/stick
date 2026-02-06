@@ -5,6 +5,7 @@ Usage:
     python install.py                  # Full install: firmware + WAV files
     python install.py --firmware-only  # Deploy firmware only (skip WAV files)
     python install.py --wav-only       # Copy WAV files to SD card only
+    python install.py --force          # Force re-copy all WAV files
     python install.py --sd-path /Volumes/SD  # Use physical card reader
 
 Requirements:
@@ -89,7 +90,48 @@ def deploy_firmware():
     print("  Firmware deployed. Reset Pico to start.")
 
 
-def deploy_wavs_mpremote():
+def _get_remote_file_info(filename):
+    """Get size and first/last 16 bytes of a file on the SD card.
+
+    Returns (size, first_bytes_hex, last_bytes_hex) or None if file missing.
+    """
+    code = (
+        "import os\n"
+        "try:\n"
+        " s=os.stat('/sd/{fn}')\n"
+        " sz=s[6]\n"
+        " f=open('/sd/{fn}','rb')\n"
+        " first=f.read(16).hex()\n"
+        " f.seek(max(0,sz-16))\n"
+        " last=f.read(16).hex()\n"
+        " f.close()\n"
+        " print(sz,first,last)\n"
+        "except:\n"
+        " print('MISSING')\n"
+    ).format(fn=filename)
+    result = subprocess.run(
+        ["mpremote", "exec", code], capture_output=True, text=True
+    )
+    output = result.stdout.strip().split("\n")[-1].strip()
+    if "MISSING" in output or result.returncode != 0:
+        return None
+    parts = output.split()
+    if len(parts) == 3:
+        return int(parts[0]), parts[1], parts[2]
+    return None
+
+
+def _get_local_file_info(path):
+    """Get size and first/last 16 bytes of a local file."""
+    sz = path.stat().st_size
+    with open(path, "rb") as f:
+        first = f.read(16).hex()
+        f.seek(max(0, sz - 16))
+        last = f.read(16).hex()
+    return sz, first, last
+
+
+def deploy_wavs_mpremote(force=False):
     """Copy WAV files to SD card via mpremote (through the Pico)."""
     print("\n== Copying WAV files to SD card via mpremote ==")
     check_mpremote()
@@ -107,17 +149,30 @@ def deploy_wavs_mpremote():
         print("  No .wav files found in {}".format(SOUNDS_DIR))
         sys.exit(1)
 
-    print("  Found {} WAV files to copy".format(len(wav_files)))
+    print("  Found {} WAV files to sync".format(len(wav_files)))
+    copied = 0
+    skipped = 0
+
     for wav in wav_files:
         remote_path = ":/sd/{}".format(wav.name)
+
+        if not force:
+            local_info = _get_local_file_info(wav)
+            remote_info = _get_remote_file_info(wav.name)
+            if remote_info and local_info == remote_info:
+                print("  {} -- up to date, skipping".format(wav.name))
+                skipped += 1
+                continue
+
         print("  Copying {} ...".format(wav.name), end=" ", flush=True)
         run(["mpremote", "fs", "cp", str(wav), remote_path])
         print("done")
+        copied += 1
 
-    print("  All WAV files copied to SD card.")
+    print("  {} copied, {} skipped (up to date).".format(copied, skipped))
 
 
-def deploy_wavs_cardreader(sd_path):
+def deploy_wavs_cardreader(sd_path, force=False):
     """Copy WAV files directly to SD card via physical card reader."""
     print("\n== Copying WAV files to SD card at {} ==".format(sd_path))
     sd = Path(sd_path)
@@ -130,14 +185,32 @@ def deploy_wavs_cardreader(sd_path):
         print("  No .wav files found in {}".format(SOUNDS_DIR))
         sys.exit(1)
 
-    print("  Found {} WAV files to copy".format(len(wav_files)))
+    print("  Found {} WAV files to sync".format(len(wav_files)))
+    copied = 0
+    skipped = 0
+
     for wav in wav_files:
         dest = sd / wav.name
+        if not force and dest.exists():
+            local_info = _get_local_file_info(wav)
+            remote_sz = dest.stat().st_size
+            with open(dest, "rb") as f:
+                remote_first = f.read(16).hex()
+                f.seek(max(0, remote_sz - 16))
+                remote_last = f.read(16).hex()
+            if local_info == (remote_sz, remote_first, remote_last):
+                print("  {} -- up to date, skipping".format(wav.name))
+                skipped += 1
+                continue
+
         print("  Copying {} ...".format(wav.name), end=" ", flush=True)
         shutil.copy2(str(wav), str(dest))
         print("done")
+        copied += 1
 
-    print("  All WAV files copied. Eject SD card safely before inserting in Pico.")
+    print("  {} copied, {} skipped (up to date).".format(copied, skipped))
+    if copied:
+        print("  Eject SD card safely before inserting in Pico.")
 
 
 def check_disk_space():
@@ -181,6 +254,11 @@ def main():
         action="store_true",
         help="Just check and report disk space on Pico and SD card",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force copy all WAV files even if already up to date",
+    )
     args = parser.parse_args()
 
     print("stick installer")
@@ -196,9 +274,9 @@ def main():
 
     if not args.firmware_only:
         if args.sd_path:
-            deploy_wavs_cardreader(args.sd_path)
+            deploy_wavs_cardreader(args.sd_path, force=args.force)
         else:
-            deploy_wavs_mpremote()
+            deploy_wavs_mpremote(force=args.force)
 
     print("\nDone!")
 

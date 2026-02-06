@@ -1,7 +1,7 @@
 # boot.py -- Mount SD card and report disk space
 #
 # Seengreat Pico Expansion Mini Rev 2.1
-# SD card on SPI1: GP14(SCK), GP15(MOSI), GP12(MISO), GP13(CS)
+# SD card on SPI1: GP10(SCK), GP11(MOSI), GP12(MISO), GP15(CS)
 
 import machine
 import os
@@ -29,14 +29,14 @@ try:
 
     spi = machine.SPI(
         1,
-        baudrate=1_000_000,
+        baudrate=400_000,
         polarity=0,
         phase=0,
-        sck=machine.Pin(14),
-        mosi=machine.Pin(15),
+        sck=machine.Pin(10),
+        mosi=machine.Pin(11),
         miso=machine.Pin(12),
     )
-    cs = machine.Pin(13, machine.Pin.OUT, value=1)
+    cs = machine.Pin(15, machine.Pin.OUT, value=1)
     sd = SDCard(spi, cs)
     os.mount(sd, "/sd")
     sd_mounted = True
@@ -53,3 +53,38 @@ try:
 except Exception as e:
     print("SD card mount FAILED:", e)
     print("Continuing without SD card.")
+
+
+# --- Boot test tune ---
+# Play 5 notes through buzzer (GP18) and audio jack (GP19)
+import time
+
+TEST_NOTES = [
+    ("C4", 262),
+    ("E4", 330),
+    ("G4", 392),
+    ("C5", 523),
+    ("G4", 392),
+]
+NOTE_MS = 200
+GAP_MS = 50
+
+try:
+    buzzer = machine.PWM(machine.Pin(18))
+    audio = machine.PWM(machine.Pin(19))
+    print("Boot tune:", " ".join(n[0] for n in TEST_NOTES))
+
+    for name, freq in TEST_NOTES:
+        buzzer.freq(freq)
+        audio.freq(freq)
+        buzzer.duty_u16(32768)
+        audio.duty_u16(32768)
+        time.sleep_ms(NOTE_MS)
+        buzzer.duty_u16(0)
+        audio.duty_u16(0)
+        time.sleep_ms(GAP_MS)
+
+    buzzer.deinit()
+    audio.deinit()
+except Exception as e:
+    print("Boot tune failed:", e)

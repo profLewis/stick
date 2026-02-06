@@ -40,8 +40,9 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 | Module | GPIOs | Connector | Notes |
 |--------|-------|-----------|-------|
 | MIDI Out (UART0) | GP0 TX | Grove 1 | 31250 baud, DIN-5 connector |
-| SD Card (SPI1) | GP14 SCK, GP15 MOSI, GP12 MISO, GP13 CS | Built-in slot | FAT32 |
+| SD Card (SPI1) | GP10 SCK, GP11 MOSI, GP12 MISO, GP15 CS | Built-in slot | FAT32 |
 | Buzzer (PWM) | GP18 | Built-in | Passive, BUZZER_SW jumper ON |
+| Audio Jack (PWM) | GP19 | Built-in | Boot tune + future audio output |
 | I2C0 → TCA9548A | GP20 SDA, GP21 SCL | Grove 6 | Sensor hub |
 | RGB LED (WS2812) | GP22 | Built-in | Status indicator |
 | RTC (DS1302) | GP6, GP7, GP8 | Built-in | Not used yet |
@@ -56,7 +57,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 ### Pin conflicts
 
 - **GP18**: shared by buzzer, audio module, and Grove 5. Only use one at a time.
-- **GP10/GP11**: shared by SD card block and Grove 3. Don't use Grove 3 while SD is active.
+- **GP10/GP11/GP15**: used by SD card SPI1. Don't use Grove 3 while SD is active.
 - **GP0/GP1**: reserved for MIDI UART.
 - **GP20/GP21**: reserved for I2C0 to TCA9548A.
 
@@ -201,11 +202,27 @@ python install.py --firmware-only
 python install.py --wav-only
 ```
 
+### Force re-copy all WAV files
+
+```bash
+python install.py --wav-only --force
+```
+
+By default, WAV files are skipped if they already exist on the SD card with
+the same size and matching first/last bytes. Use `--force` to overwrite all.
+
 ### With physical card reader (faster for WAV files)
 
 ```bash
 python install.py --sd-path /Volumes/SD
 ```
+
+## Boot Test Tune
+
+On every power-up, after mounting the SD card, the Pico plays a 5-note test
+sequence (C4 E4 G4 C5 G4) through both the **buzzer** (GP18) and the **audio
+jack** (GP19). This confirms audio output is working. The tune plays before
+`main.py` starts.
 
 ## Jumper Settings
 
