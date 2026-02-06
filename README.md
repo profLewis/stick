@@ -29,7 +29,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
   │                                                         │
   │  [Grove 4]     [Grove 5]     [Grove 6]     🔊   🟢     │
   │  GP16/GP17     GP18/GP19     GP20/GP21     BUZ  RGB     │
-  │  (free)        (buzzer)      I2C0→TCA                   │
+  │  I2C→TCA       (buzzer)      (free)                     │
   │                                                         │
   │  [K1]  [K2]                                             │
   └─────────────────────────────────────────────────────────┘
@@ -43,7 +43,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 | SD Card (SPI1) | GP10 SCK, GP11 MOSI, GP12 MISO, GP15 CS | Built-in slot | FAT32 |
 | Buzzer (PWM) | GP18 | Built-in | Passive, BUZZER_SW jumper ON |
 | Audio Jack (PWM) | GP19 | Built-in | Boot tune + future audio output |
-| I2C0 → TCA9548A | GP16 SDA, GP17 SCL | Grove 4 | Sensor hub (SoftI2C) |
+| I2C → TCA9548A | GP16 SDA, GP17 SCL | Grove 4 | Sensor hub (SoftI2C) |
 | RGB LED (WS2812) | GP22 | Built-in | Status indicator |
 | RTC (DS1302) | GP6, GP7, GP8 | Built-in | Not used yet |
 
@@ -52,14 +52,14 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 | Grove | GPIOs | Status |
 |-------|-------|--------|
 | 2 | GP2, GP3 | Free |
-| 4 | GP16, GP17 | Free |
+| 6 | GP20, GP21 | Free |
 
 ### Pin conflicts
 
 - **GP18**: shared by buzzer, audio module, and Grove 5. Only use one at a time.
 - **GP10/GP11/GP15**: used by SD card SPI1. Don't use Grove 3 while SD is active.
 - **GP0/GP1**: reserved for MIDI UART.
-- **GP20/GP21**: reserved for I2C0 to TCA9548A.
+- **GP16/GP17**: reserved for I2C to TCA9548A sensor hub.
 
 ## Wiring Diagram
 
@@ -133,7 +133,29 @@ Pico GP0  --[220 ohm]--> DIN-5 Pin 5
 
 Pin numbering viewed from solder side of connector. Two 220-ohm resistors and a DIN-5 female connector are all you need.
 
-## Sensors
+## Sensor Configuration
+
+Sensor-to-sound mappings are defined in `firmware/sensors.cfg`:
+
+```
+# Format:  hub_addr  channel  pin  sound
+0x70  0  A  C4
+0x70  0  B  E4
+0x70  1  A  G4
+0x70  1  B  C5
+```
+
+| Field | Description |
+|-------|-------------|
+| `hub_addr` | TCA9548A I2C address (`0x70`, `0x71`, etc.) |
+| `channel` | TCA9548A channel 0-7 |
+| `pin` | `A` = SDA wire (sensor A), `B` = SCL wire (sensor B) |
+| `sound` | Note name from `lib/notes.py` (C4-E6) |
+
+The config is loaded from `/sd/sensors.cfg` on the SD card first, falling back
+to `sensors.cfg` on internal flash. Lines starting with `#` are comments.
+
+### Sensors
 
 Piezo sensors with A2D comparator boards (GND, VCC, AD0, D0). The D0 digital
 output is routed through the TCA9548A used as a digital signal multiplexer:
@@ -141,16 +163,6 @@ output is routed through the TCA9548A used as a digital signal multiplexer:
 - Each TCA9548A channel carries **2 sensor D0 lines**
 - SDA wire = sensor A (D0), SCL wire = sensor B (D0)
 - D0 is **active-low**: 0 = hit, 1 = idle
-
-| Sensor | TCA Ch | Wire | Default Note |
-|--------|--------|------|-------------|
-| S1a | 0 | SDA | C4 (261 Hz) |
-| S1b | 0 | SCL | E4 (329 Hz) |
-| S2a | 1 | SDA | G4 (392 Hz) |
-| S2b | 1 | SCL | C5 (523 Hz) |
-
-Edit the `SENSORS` list in `firmware/main.py` to change note assignments or
-add more sensors.
 
 Rising-edge detection with 50ms debounce. On boot, a status report shows all
 configured sensors and their current state (IDLE/TRIGGERED).
@@ -164,10 +176,10 @@ To add a sensor pair on the first hub:
 
 1. Connect sensor A D0 → SDA wire on a new TCA channel
 2. Connect sensor B D0 → SCL wire on the same channel
-3. Add entries to `SENSORS` in `firmware/main.py`:
-   ```python
-   (0x70, 2, 0, "E5"),    # Hub 1, Ch 2, sensor A
-   (0x70, 2, 1, "G5"),    # Hub 1, Ch 2, sensor B
+3. Add entries to `firmware/sensors.cfg`:
+   ```
+   0x70  2  A  E5
+   0x70  2  B  G5
    ```
 4. Redeploy: `python install.py --firmware-only`
 
@@ -175,17 +187,12 @@ To add a sensor pair on the first hub:
 
 1. Set A0 HIGH on the second TCA9548A board (address becomes 0x71)
 2. Connect SDA/SCL/VCC/GND in parallel with the first hub
-3. Add `0x71` to `HUB_ADDRESSES` in `firmware/main.py`
-4. Add sensor entries with `0x71`:
-   ```python
-   HUB_ADDRESSES = [0x70, 0x71]
-
-   SENSORS = [
-       ...
-       (0x71, 0, 0, "A4"),    # Hub 2, Ch 0, sensor A
-       (0x71, 0, 1, "B4"),    # Hub 2, Ch 0, sensor B
-   ]
+3. Add entries to `firmware/sensors.cfg`:
    ```
+   0x71  0  A  A4
+   0x71  0  B  B4
+   ```
+4. Redeploy: `python install.py --firmware-only`
 
 ## Disk Space
 
@@ -207,8 +214,10 @@ stick/
   install.py              # Host-side deploy script (macOS, uses mpremote)
   sounds_source/*.wav     # 29 WAV files (C4-E6, 16-bit mono 44100 Hz)
   firmware/               # MicroPython code deployed to Pico
-    boot.py               #   Mounts SD card, reports disk space
+    boot.py               #   Mounts SD card, reports disk space, boot tune
     main.py               #   Sensor loop, buzzer PWM, MIDI out
+    config.py             #   Parses sensors.cfg into runtime config
+    sensors.cfg           #   Sensor-to-sound mappings (text file)
     lib/
       notes.py            #   Note name -> frequency + MIDI number
       midi.py             #   MidiOut class (UART 31250 baud)
@@ -261,10 +270,9 @@ python install.py --sd-path /Volumes/SD
 
 ## Boot Test Tune
 
-On every power-up, after mounting the SD card, the Pico plays a 5-note test
-sequence (C4 E4 G4 C5 G4) through both the **buzzer** (GP18) and the **audio
-jack** (GP19). This confirms audio output is working. The tune plays before
-`main.py` starts.
+On every power-up, after mounting the SD card, the Pico plays the Tetris theme
+(Korobeiniki) through both the **buzzer** (GP18) and the **audio jack** (GP19).
+This confirms audio output is working. The tune plays before `main.py` starts.
 
 ## Jumper Settings
 

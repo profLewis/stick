@@ -30,6 +30,8 @@ SDCARD_DRIVER_URL = (
 FIRMWARE_FILES = [
     ("boot.py", ":boot.py"),
     ("main.py", ":main.py"),
+    ("config.py", ":config.py"),
+    ("sensors.cfg", ":sensors.cfg"),
     ("lib/notes.py", ":lib/notes.py"),
     ("lib/midi.py", ":lib/midi.py"),
     ("lib/sdcard.py", ":lib/sdcard.py"),

@@ -55,34 +55,57 @@ except Exception as e:
     print("Continuing without SD card.")
 
 
-# --- Boot test tune ---
-# Play 5 notes through buzzer (GP18) and audio jack (GP19)
+# --- Boot test tune: Tetris theme (Korobeiniki) ---
+# Plays through buzzer (GP18) and audio jack (GP19)
 import time
 
-TEST_NOTES = [
-    ("C4", 262),
-    ("E4", 330),
-    ("G4", 392),
-    ("C5", 523),
-    ("G4", 392),
+# (frequency_hz, duration_ms)  0 = rest
+BPM = 150
+Q = 60000 // BPM     # quarter note
+E = Q // 2           # eighth note
+H = Q * 2            # half note
+DQ = Q + E           # dotted quarter
+
+TETRIS = [
+    (659, Q),    # E5
+    (494, E),    # B4
+    (523, E),    # C5
+    (587, Q),    # D5
+    (523, E),    # C5
+    (494, E),    # B4
+    (440, Q),    # A4
+    (440, E),    # A4
+    (523, E),    # C5
+    (659, Q),    # E5
+    (587, E),    # D5
+    (523, E),    # C5
+    (494, DQ),   # B4
+    (523, E),    # C5
+    (587, Q),    # D5
+    (659, Q),    # E5
+    (523, Q),    # C5
+    (440, Q),    # A4
+    (440, H),    # A4
 ]
-NOTE_MS = 200
-GAP_MS = 50
+GAP_MS = 20
 
 try:
     buzzer = machine.PWM(machine.Pin(18))
     audio = machine.PWM(machine.Pin(19))
-    print("Boot tune:", " ".join(n[0] for n in TEST_NOTES))
+    print("Boot tune: Tetris theme")
 
-    for name, freq in TEST_NOTES:
-        buzzer.freq(freq)
-        audio.freq(freq)
-        buzzer.duty_u16(32768)
-        audio.duty_u16(32768)
-        time.sleep_ms(NOTE_MS)
-        buzzer.duty_u16(0)
-        audio.duty_u16(0)
-        time.sleep_ms(GAP_MS)
+    for freq, dur in TETRIS:
+        if freq > 0:
+            buzzer.freq(freq)
+            audio.freq(freq)
+            buzzer.duty_u16(32768)
+            audio.duty_u16(32768)
+            time.sleep_ms(dur - GAP_MS)
+            buzzer.duty_u16(0)
+            audio.duty_u16(0)
+            time.sleep_ms(GAP_MS)
+        else:
+            time.sleep_ms(dur)
 
     buzzer.deinit()
     audio.deinit()

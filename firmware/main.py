@@ -23,39 +23,8 @@ from lib.notes import freq, midi_note
 from lib.midi import MidiOut
 from lib.tca9548a import TCA9548A
 
-# ---- Hub Configuration ----
-# TCA9548A I2C addresses. Default is 0x70.
-# For a second hub, set A0 high -> 0x71.
-# Up to 8 hubs (0x70-0x77) by setting A0/A1/A2.
-HUB_ADDRESSES = [0x70]  # Add 0x71 for a second hub
-
-# ---- Sensor Configuration ----
-# Each entry: (hub_addr, tca_channel, pin_index, note_name)
-#   hub_addr:  I2C address of the TCA9548A (0x70, 0x71, etc.)
-#   tca_channel: 0-7
-#   pin_index: 0 = SDA wire (sensor A), 1 = SCL wire (sensor B)
-#   note_name: must match a WAV filename stem
-#
-# Add/remove entries here when connecting more sensors.
-SENSORS = [
-    # Hub 0x70
-    (0x70, 0, 0, "C4"),    # Hub 1, Ch 0, sensor A -> C4  (261 Hz)
-    (0x70, 0, 1, "E4"),    # Hub 1, Ch 0, sensor B -> E4  (329 Hz)
-    (0x70, 1, 0, "G4"),    # Hub 1, Ch 1, sensor A -> G4  (392 Hz)
-    (0x70, 1, 1, "C5"),    # Hub 1, Ch 1, sensor B -> C5  (523 Hz)
-    # Uncomment to add more on hub 0x70:
-    # (0x70, 2, 0, "E5"),  # Hub 1, Ch 2, sensor A
-    # (0x70, 2, 1, "G5"),  # Hub 1, Ch 2, sensor B
-    #
-    # Uncomment for second hub at 0x71 (set A0 high on the board):
-    # (0x71, 0, 0, "A4"),  # Hub 2, Ch 0, sensor A
-    # (0x71, 0, 1, "B4"),  # Hub 2, Ch 0, sensor B
-]
-
-# ---- Timing ----
-TONE_DURATION_MS = 200
-DEBOUNCE_MS = 50
-POLL_MS = 5
+# ---- Load configuration from config.py ----
+from config import HUB_ADDRESSES, SENSORS, TONE_DURATION_MS, DEBOUNCE_MS, POLL_MS
 
 # ---- Pin setup ----
 MUX_SDA = 16   # Grove 4 pin 1
