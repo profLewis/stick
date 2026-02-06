@@ -122,16 +122,19 @@ a channel via I2C, the Pico can read the raw D0 state on GP16/GP17.
 
 ## MIDI Out Wiring
 
-Connect a 5-pin DIN connector to Grove 1 (GP0/GP1/3.3V/GND):
+Wire a standard [5-pin DIN MIDI connector](https://www.midi.org/specifications-old/item/midi-din-electrical-specification)
+to the Grove 1 4-pin header (3.3V, GND, GP0, GP1):
 
 ```
-Pico 3.3V --[220 ohm]--> DIN-5 Pin 4
-Pico GP0  --[220 ohm]--> DIN-5 Pin 5
-                          DIN-5 Pin 2 --> GND (shield)
-                          DIN-5 Pins 1, 3 --> not connected
+Grove 1 3.3V --[220 ohm]--> DIN-5 Pin 4
+Grove 1 GP0  --[220 ohm]--> DIN-5 Pin 5
+Grove 1 GND  ─────────────→ DIN-5 Pin 2  (shield)
+                              DIN-5 Pins 1, 3 --> not connected
 ```
 
-Pin numbering viewed from solder side of connector. Two 220-ohm resistors and a DIN-5 female connector are all you need.
+Pin numbering viewed from solder side of connector. The MIDI standard uses a
+5-pin DIN connector even though only 3 pins are wired. Two 220-ohm resistors
+and a DIN-5 female connector are all you need.
 
 ## Sensor Configuration
 
@@ -185,7 +188,10 @@ To add a sensor pair on the first hub:
 
 ### Daisy-chaining a second hub
 
-1. Set A0 HIGH on the second TCA9548A board (address becomes 0x71)
+1. Set A0 HIGH on the second TCA9548A board (address becomes 0x71).
+   Most TCA9548A boards have solder jumper pads for A0/A1/A2 — bridge the
+   A0 pad with a blob of solder. See your board's datasheet for the exact
+   pad location. ([TCA9548A datasheet](https://www.ti.com/lit/ds/symlink/tca9548a.pdf), section 9.3.1)
 2. Connect SDA/SCL/VCC/GND in parallel with the first hub
 3. Add entries to `firmware/sensors.cfg`:
    ```
@@ -262,11 +268,36 @@ python install.py --wav-only --force
 By default, WAV files are skipped if they already exist on the SD card with
 the same size and matching first/last bytes. Use `--force` to overwrite all.
 
-### With physical card reader (faster for WAV files)
+### Loading files via SD card reader
+
+If you have a USB card reader (or a built-in SD slot on your computer), you
+can copy files directly to the SD card — much faster than transferring through
+the Pico. Insert the micro SD card into your reader and either:
+
+**Drag and drop** in Finder/Explorer: open the SD card volume and drag the
+WAV files from `sounds_source/` and `firmware/sensors.cfg` onto it.
+
+**From the command line:**
 
 ```bash
+# Via install script (validates files and skips duplicates):
 python install.py --sd-path /Volumes/SD
+
+# Or copy manually (macOS example):
+cp sounds_source/*.wav /Volumes/SD/
+cp firmware/sensors.cfg /Volumes/SD/
 ```
+
+Eject the SD card safely before removing it. The Pico reads `sensors.cfg`
+from the SD card first (`/sd/sensors.cfg`), falling back to the copy on
+internal flash.
+
+### Missing WAV files
+
+The install script checks that every sound referenced in `sensors.cfg` has a
+matching WAV file. If a note is missing (e.g. `C3.wav`), it will try to
+generate one by octave-shifting from an existing file (e.g. `C4.wav`).
+Generated files are named with a `_synth` suffix (e.g. `C3_synth.wav`).
 
 ## Boot Test Tune
 

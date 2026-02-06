@@ -14,9 +14,12 @@ Requirements:
 
 import argparse
 import os
+import re
+import struct
 import subprocess
 import sys
 import shutil
+import wave
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -26,6 +29,7 @@ SDCARD_DRIVER_URL = (
     "https://raw.githubusercontent.com/micropython/micropython-lib/"
     "master/micropython/drivers/storage/sdcard/sdcard.py"
 )
+NOTE_PATTERN = re.compile(r"^([A-G])(s?)(\d+)$")
 
 FIRMWARE_FILES = [
     ("boot.py", ":boot.py"),
@@ -37,6 +41,148 @@ FIRMWARE_FILES = [
     ("lib/sdcard.py", ":lib/sdcard.py"),
     ("lib/tca9548a.py", ":lib/tca9548a.py"),
 ]
+
+
+def parse_note_name(name):
+    """Parse 'C4', 'Cs5', 'Fs6' into (letter, sharp, octave) or None."""
+    m = NOTE_PATTERN.match(name)
+    if m:
+        return m.group(1), m.group(2), int(m.group(3))
+    return None
+
+
+def parse_sensor_config(cfg_path):
+    """Parse sensors.cfg and return list of referenced sound names."""
+    sounds = []
+    with open(cfg_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 4:
+                sounds.append(parts[3])
+    return sounds
+
+
+def octave_shift_wav(src_path, dest_path, octaves):
+    """Generate a WAV by shifting octaves (decimate up, duplicate down)."""
+    with wave.open(str(src_path), "rb") as src:
+        params = src.getparams()
+        n_frames = src.getnframes()
+        raw = src.readframes(n_frames)
+
+    samples = list(struct.unpack("<{}h".format(n_frames * params.nchannels), raw))
+
+    if octaves > 0:
+        for _ in range(octaves):
+            samples = samples[::2]
+    elif octaves < 0:
+        for _ in range(-octaves):
+            expanded = []
+            for s in samples:
+                expanded.append(s)
+                expanded.append(s)
+            samples = expanded
+
+    with wave.open(str(dest_path), "wb") as out:
+        out.setnchannels(params.nchannels)
+        out.setsampwidth(params.sampwidth)
+        out.setframerate(params.framerate)
+        out.writeframes(struct.pack("<{}h".format(len(samples)), *samples))
+
+    direction = "up" if octaves > 0 else "down"
+    print(
+        "  Generated {} ({} {} octave(s) from {})".format(
+            dest_path.name, direction, abs(octaves), src_path.name
+        )
+    )
+
+
+def generate_missing_wavs():
+    """Generate WAV files for notes in sensors.cfg missing from sounds_source.
+
+    Returns set of all available WAV stems after generation.
+    """
+    cfg_path = FIRMWARE_DIR / "sensors.cfg"
+    existing_stems = {p.stem for p in SOUNDS_DIR.glob("*.wav")}
+
+    if not cfg_path.exists():
+        return existing_stems
+
+    referenced = parse_sensor_config(cfg_path)
+
+    # Build index: (letter, sharp) -> [(octave, stem)]
+    source_index = {}
+    for stem in existing_stems:
+        parsed = parse_note_name(stem)
+        if parsed:
+            letter, sharp, octave = parsed
+            source_index.setdefault((letter, sharp), []).append((octave, stem))
+
+    generated = set()
+    for sound in referenced:
+        if sound in existing_stems or sound + "_synth" in existing_stems:
+            continue
+
+        parsed = parse_note_name(sound)
+        if not parsed:
+            continue
+
+        letter, sharp, target_octave = parsed
+        candidates = source_index.get((letter, sharp), [])
+        if not candidates:
+            print(
+                "  WARNING: No source for note '{}{}'".format(
+                    letter, "#" if sharp else ""
+                )
+            )
+            continue
+
+        candidates.sort(key=lambda x: abs(x[0] - target_octave))
+        src_octave, src_stem = candidates[0]
+        shift = target_octave - src_octave
+
+        src_path = SOUNDS_DIR / "{}.wav".format(src_stem)
+        dest_path = SOUNDS_DIR / "{}_synth.wav".format(sound)
+        octave_shift_wav(src_path, dest_path, shift)
+        generated.add(sound + "_synth")
+
+    if generated:
+        print("  Generated {} synth WAV file(s)".format(len(generated)))
+
+    return existing_stems | generated
+
+
+def validate_sounds(available_wavs):
+    """Check that every sound in sensors.cfg has a WAV file."""
+    cfg_path = FIRMWARE_DIR / "sensors.cfg"
+    if not cfg_path.exists():
+        return
+
+    referenced = parse_sensor_config(cfg_path)
+    present = []
+    synth = []
+    missing = []
+
+    for sound in referenced:
+        if sound in available_wavs:
+            present.append(sound)
+        elif sound + "_synth" in available_wavs:
+            synth.append(sound)
+        else:
+            missing.append(sound)
+
+    print("\n== Sound file validation ==")
+    print("  sensors.cfg references {} sounds".format(len(referenced)))
+    if present:
+        print("  OK:      {} ({})".format(len(present), ", ".join(present)))
+    if synth:
+        print("  Synth:   {} ({})".format(len(synth), ", ".join(synth)))
+    if missing:
+        print("  MISSING: {} ({})".format(len(missing), ", ".join(missing)))
+    if not missing:
+        print("  All sounds accounted for.")
 
 
 def run(cmd, check=True):
@@ -173,6 +319,13 @@ def deploy_wavs_mpremote(force=False):
 
     print("  {} copied, {} skipped (up to date).".format(copied, skipped))
 
+    # Deploy sensors.cfg to SD card
+    cfg_src = str(FIRMWARE_DIR / "sensors.cfg")
+    if os.path.exists(cfg_src):
+        print("  Copying sensors.cfg to SD card ...", end=" ", flush=True)
+        run(["mpremote", "fs", "cp", cfg_src, ":/sd/sensors.cfg"])
+        print("done")
+
 
 def deploy_wavs_cardreader(sd_path, force=False):
     """Copy WAV files directly to SD card via physical card reader."""
@@ -211,6 +364,15 @@ def deploy_wavs_cardreader(sd_path, force=False):
         copied += 1
 
     print("  {} copied, {} skipped (up to date).".format(copied, skipped))
+
+    # Deploy sensors.cfg to SD card
+    cfg_src = FIRMWARE_DIR / "sensors.cfg"
+    if cfg_src.exists():
+        cfg_dest = sd / "sensors.cfg"
+        print("  Copying sensors.cfg to SD card ...", end=" ", flush=True)
+        shutil.copy2(str(cfg_src), str(cfg_dest))
+        print("done")
+
     if copied:
         print("  Eject SD card safely before inserting in Pico.")
 
@@ -275,10 +437,16 @@ def main():
         deploy_firmware()
 
     if not args.firmware_only:
+        # Generate any missing WAV files before deploying
+        available_wavs = generate_missing_wavs()
+
         if args.sd_path:
             deploy_wavs_cardreader(args.sd_path, force=args.force)
         else:
             deploy_wavs_mpremote(force=args.force)
+
+        # Validate all referenced sounds have WAV files
+        validate_sounds(available_wavs)
 
     print("\nDone!")
 
