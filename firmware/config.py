@@ -2,6 +2,10 @@
 #
 # Reads sensor-to-sound mappings from /sd/sensors.cfg (SD card)
 # or falls back to sensors.cfg on internal flash.
+#
+# Supports two sensor types:
+#   gpio  pin_number  sound        -> ("gpio", pin, 0, sound)
+#   hub_addr  channel  pin  sound  -> (hub_addr, channel, pin_idx, sound)
 
 import os
 
@@ -23,16 +27,24 @@ def _parse_config(path):
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
-            if len(parts) < 4:
+            if len(parts) < 3:
                 continue
-            hub_addr = int(parts[0], 16)
-            channel = int(parts[1])
-            pin_idx = pin_map.get(parts[2])
-            sound = parts[3]
-            if pin_idx is None:
-                continue
-            hubs.add(hub_addr)
-            sensors.append((hub_addr, channel, pin_idx, sound))
+
+            if parts[0].lower() == "gpio":
+                # Direct GPIO: gpio  pin_number  sound
+                gpio_pin = int(parts[1])
+                sound = parts[2]
+                sensors.append(("gpio", gpio_pin, 0, sound))
+            elif len(parts) >= 4:
+                # TCA9548A: hub_addr  channel  pin  sound
+                hub_addr = int(parts[0], 16)
+                channel = int(parts[1])
+                pin_idx = pin_map.get(parts[2])
+                sound = parts[3]
+                if pin_idx is None:
+                    continue
+                hubs.add(hub_addr)
+                sensors.append((hub_addr, channel, pin_idx, sound))
 
     return sorted(hubs), sensors
 
@@ -52,10 +64,8 @@ if _cfg_path:
     HUB_ADDRESSES, SENSORS = _parse_config(_cfg_path)
 else:
     print("Config: sensors.cfg not found, using defaults")
-    HUB_ADDRESSES = [0x70]
+    HUB_ADDRESSES = []
     SENSORS = [
-        (0x70, 0, 0, "C4"),
-        (0x70, 0, 1, "E4"),
-        (0x70, 1, 0, "G4"),
-        (0x70, 1, 1, "C5"),
+        ("gpio", 16, 0, "C4"),
+        ("gpio", 17, 0, "E4"),
     ]

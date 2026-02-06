@@ -2,14 +2,9 @@
 #
 # Hardware: Pico 2 + Seengreat Pico Expansion Mini Rev 2.1
 #
-# Sensors via TCA9548A digital mux (supports daisy-chaining 2 hubs):
-#   TCA9548A hub(s) on Grove 4 (SoftI2C: GP16 SDA, GP17 SCL)
-#   Each channel carries up to 2 sensor D0 lines:
-#     SDA wire = sensor A (D0), SCL wire = sensor B (D0)
-#   D0 is active-low: 0 = hit, 1 = idle
-#
-# Hub addresses: 0x70 (default), 0x71 (A0 high) for second hub
-# Max: 2 hubs x 8 channels x 2 sensors = 32 sensors
+# Sensor modes:
+#   Direct GPIO: D0 wired to a Pico GPIO pin (active-HIGH, needs pull-down)
+#   TCA9548A:    D0 via I2C mux on Grove 4 (SoftI2C: GP16 SDA, GP17 SCL)
 #
 # Buzzer: PWM on GP18 (passive, BUZZER_SW jumper must be ON)
 # Audio:  PWM on GP19 (audio jack output)
@@ -21,7 +16,6 @@ import time
 import neopixel
 from lib.notes import freq, midi_note
 from lib.midi import MidiOut
-from lib.tca9548a import TCA9548A
 
 # ---- Load configuration from config.py ----
 from config import HUB_ADDRESSES, SENSORS, TONE_DURATION_MS, DEBOUNCE_MS, POLL_MS
@@ -33,10 +27,20 @@ BUZZER_PIN = 18
 AUDIO_PIN = 19
 RGB_PIN = 22
 
-# ---- TCA9548A hubs ----
+# ---- TCA9548A hubs (only if configured) ----
 hubs = {}
-for addr in HUB_ADDRESSES:
-    hubs[addr] = TCA9548A(sda_pin=MUX_SDA, scl_pin=MUX_SCL, address=addr)
+if HUB_ADDRESSES:
+    from lib.tca9548a import TCA9548A
+    for addr in HUB_ADDRESSES:
+        hubs[addr] = TCA9548A(sda_pin=MUX_SDA, scl_pin=MUX_SCL, address=addr)
+
+# ---- GPIO sensor pins (active-HIGH, pull-down) ----
+gpio_pins = {}
+for sensor in SENSORS:
+    if sensor[0] == "gpio":
+        pin_num = sensor[1]
+        if pin_num not in gpio_pins:
+            gpio_pins[pin_num] = machine.Pin(pin_num, machine.Pin.IN, machine.Pin.PULL_DOWN)
 
 # ---- Buzzer + audio jack ----
 buzzer = machine.PWM(machine.Pin(BUZZER_PIN))
@@ -132,10 +136,13 @@ def play_tone_with_rgb(frequency_hz, duration_ms, midi_num):
 
 def handle_hit(sensor):
     """Handle a sensor trigger: play tone + send MIDI + animate RGB."""
-    hub_addr, ch, pin_idx, note_name = sensor
+    mode, ch, pin_idx, note_name = sensor
     f = freq(note_name)
     mn = midi_note(note_name)
-    label = "0x{:02x}:Ch{}:{}".format(hub_addr, ch, "A" if pin_idx == 0 else "B")
+    if mode == "gpio":
+        label = "GPIO{}".format(ch)
+    else:
+        label = "0x{:02x}:Ch{}:{}".format(mode, ch, "A" if pin_idx == 0 else "B")
     print("{} -> {} ({} Hz, MIDI {})".format(label, note_name, f, mn))
 
     if mn is not None:
@@ -154,46 +161,56 @@ def handle_hit(sensor):
 
 def read_sensor(sensor):
     """Read a single sensor's D0 state. Returns 1=hit, 0=idle."""
-    hub_addr, ch, pin_idx, _ = sensor
-    mux = hubs[hub_addr]
-    a, b = mux.read_pins(ch)
-    raw = a if pin_idx == 0 else b
-    return 1 if raw == 0 else 0  # invert: active-low
+    mode, ch, pin_idx, _ = sensor
+    if mode == "gpio":
+        # Direct GPIO: active-HIGH (D0 goes HIGH on hit)
+        return gpio_pins[ch].value()
+    else:
+        # TCA9548A: active-LOW (D0 goes LOW on hit)
+        mux = hubs[mode]
+        a, b = mux.read_pins(ch)
+        raw = a if pin_idx == 0 else b
+        return 1 if raw == 0 else 0  # invert: active-low
 
 
 # ---- Sensor status report ----
 def report_sensors():
     """Read and report the state of all configured sensors."""
-    hub_count = len(set(h for h, _, _, _ in SENSORS))
-    ch_count = len(set((h, c) for h, c, _, _ in SENSORS))
+    gpio_count = sum(1 for s in SENSORS if s[0] == "gpio")
+    hub_count = len(set(h for h, _, _, _ in SENSORS if h != "gpio"))
     print()
     print("== Sensor Status ==")
-    print("Configured: {} sensors on {} channels across {} hub(s)".format(
-        len(SENSORS), ch_count, hub_count))
+    print("Configured: {} sensors ({} GPIO, {} hub)".format(
+        len(SENSORS), gpio_count, len(SENSORS) - gpio_count))
     print()
     for sensor in SENSORS:
-        hub_addr, ch, pin_idx, note_name = sensor
+        mode, ch, pin_idx, note_name = sensor
         val = read_sensor(sensor)
         state = "TRIGGERED" if val else "IDLE"
-        ab = "A(SDA)" if pin_idx == 0 else "B(SCL)"
         f = freq(note_name)
         mn = midi_note(note_name)
-        print("  [0x{:02x}] Ch {} {} -> {:<3s} {:>7.1f} Hz  MIDI {:>3d}  [{}]".format(
-            hub_addr, ch, ab, note_name, f, mn, state))
+        if mode == "gpio":
+            print("  GPIO{:<3d}       -> {:<3s} {:>7.1f} Hz  MIDI {:>3d}  [{}]".format(
+                ch, note_name, f, mn, state))
+        else:
+            ab = "A(SDA)" if pin_idx == 0 else "B(SCL)"
+            print("  [0x{:02x}] Ch {} {} -> {:<3s} {:>7.1f} Hz  MIDI {:>3d}  [{}]".format(
+                mode, ch, ab, note_name, f, mn, state))
     print()
 
 
-# ---- Detect hubs ----
-from machine import SoftI2C, Pin
-_i2c = SoftI2C(sda=Pin(MUX_SDA), scl=Pin(MUX_SCL), freq=50000)
-_found = _i2c.scan()
-print()
-print("I2C bus scan: {}".format(["0x{:02x}".format(a) for a in _found]))
-for addr in HUB_ADDRESSES:
-    if addr in _found:
-        print("  Hub 0x{:02x}: OK".format(addr))
-    else:
-        print("  Hub 0x{:02x}: NOT FOUND".format(addr))
+# ---- Detect hubs (only if configured) ----
+if HUB_ADDRESSES:
+    from machine import SoftI2C, Pin
+    _i2c = SoftI2C(sda=Pin(MUX_SDA), scl=Pin(MUX_SCL), freq=50000)
+    _found = _i2c.scan()
+    print()
+    print("I2C bus scan: {}".format(["0x{:02x}".format(a) for a in _found]))
+    for addr in HUB_ADDRESSES:
+        if addr in _found:
+            print("  Hub 0x{:02x}: OK".format(addr))
+        else:
+            print("  Hub 0x{:02x}: NOT FOUND".format(addr))
 
 # ---- Boot ----
 set_rgb(0, 0, 10)
@@ -202,7 +219,7 @@ set_rgb(0, 0, 0)
 print("stick ready -- {} sensors active".format(len(SENSORS)))
 
 # ---- Main loop ----
-# State: {(hub, ch, pin): (prev_value, last_hit_ms)}
+# State: {(mode, ch, pin): (prev_value, last_hit_ms)}
 state = {}
 breath_counter = 0
 
@@ -211,17 +228,17 @@ BREATH_TABLE = [1, 2, 3, 5, 7, 9, 11, 13, 14, 15, 15, 14, 13, 11, 9, 7, 5, 3, 2,
 
 # Initialize with current readings
 for sensor in SENSORS:
-    hub_addr, ch, pin_idx, _ = sensor
+    mode, ch, pin_idx, _ = sensor
     val = read_sensor(sensor)
-    state[(hub_addr, ch, pin_idx)] = (val, 0)
+    state[(mode, ch, pin_idx)] = (val, 0)
 
 while True:
     now = time.ticks_ms()
     hit_this_cycle = False
 
     for sensor in SENSORS:
-        hub_addr, ch, pin_idx, note_name = sensor
-        key = (hub_addr, ch, pin_idx)
+        mode, ch, pin_idx, note_name = sensor
+        key = (mode, ch, pin_idx)
 
         current = read_sensor(sensor)
         prev, last_ms = state[key]
