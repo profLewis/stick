@@ -6,8 +6,8 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 
 1. **Raspberry Pi Pico 2** (RP2350) — 4 MB flash
 2. **[Seengreat Pico Expansion Mini Rev 2.1](https://seengreat.com/wiki/167/pico-expansion-mini)** — buzzer, SD card, RGB LED, Grove connectors
-3. **TCA9548A V1.0** — I2C multiplexer hub for sensor routing
-4. **PCF8574** — I2C GPIO expander (behind TCA9548A channel 0)
+3. **TCA9548A V1.0** — I2C multiplexer hub, used as digital signal mux for sensors
+4. **Piezo A2D boards** — comparator modules with D0 digital trigger output
 
 ## Board Layout
 
@@ -43,7 +43,7 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 | SD Card (SPI1) | GP10 SCK, GP11 MOSI, GP12 MISO, GP15 CS | Built-in slot | FAT32 |
 | Buzzer (PWM) | GP18 | Built-in | Passive, BUZZER_SW jumper ON |
 | Audio Jack (PWM) | GP19 | Built-in | Boot tune + future audio output |
-| I2C0 → TCA9548A | GP20 SDA, GP21 SCL | Grove 6 | Sensor hub |
+| I2C0 → TCA9548A | GP16 SDA, GP17 SCL | Grove 4 | Sensor hub (SoftI2C) |
 | RGB LED (WS2812) | GP22 | Built-in | Status indicator |
 | RTC (DS1302) | GP6, GP7, GP8 | Built-in | Not used yet |
 
@@ -72,9 +72,9 @@ Plays tones and sends MIDI when triggered by piezo sensors.
   │  ├── GP0  ──[220Ω]──→ DIN-5 Pin 5  ├── MIDI OUT                │
   │  └── GND  ──────────→ DIN-5 Pin 2 ─┘   (to synth/player)      │
   │                                                                 │
-  │  Grove 6 (GP20/GP21)                                            │
-  │  ├── GP20 (SDA) ────┐                                          │
-  │  ├── GP21 (SCL) ──┐ │                                          │
+  │  Grove 4 (GP16/GP17)                                            │
+  │  ├── GP16 (SDA) ────┐                                          │
+  │  ├── GP17 (SCL) ──┐ │                                          │
   │  ├── 3.3V ───────┐│ │                                          │
   │  └── GND  ──────┐││ │                                          │
   │                  ││││                                           │
@@ -84,8 +84,8 @@ Plays tones and sends MIDI when triggered by piezo sensors.
   │           │  I2C Hub     │                                      │
   │           │  addr: 0x70  │                                      │
   │           ├──────────────┤                                      │
-  │           │ Ch 0 (I2C0)  │──→ PCF8574 (0x20) ──→ S1a (P0)     │
-  │           │              │                   ──→ S1b (P1)      │
+  │           │ Ch 0         │──→ SDA wire ──→ S1a D0 (active-low) │
+  │           │              │──→ SCL wire ──→ S1b D0              │
   │           │ Ch 1         │    (available)                       │
   │           │ Ch 2         │    (available)                       │
   │           │  ...         │                                      │
@@ -103,17 +103,22 @@ Plays tones and sends MIDI when triggered by piezo sensors.
 ### Sensor wiring detail
 
 ```
-Piezo sensor ──→ comparator board ──→ PCF8574 GPIO expander
-                                       │
-                 S1a digital ──────→ P0 (bit 0, active-low)
-                 S1b digital ──────→ P1 (bit 1, active-low)
-                                       │
-                         I2C (SDA/SCL) ─┘
-                              │
-                    TCA9548A channel 0
-                              │
-                    I2C0 (GP20/GP21) on Pico
+Piezo ──→ A2D comparator board ──→ D0 output (active-low)
+
+Channel 0:                           Channel 1:
+  Sensor A D0 ──→ SDA wire             Sensor A D0 ──→ SDA wire
+  Sensor B D0 ──→ SCL wire             Sensor B D0 ──→ SCL wire
+         │                                    │
+    TCA9548A Ch 0                        TCA9548A Ch 1
+              \                           /
+               ──→ TCA9548A (0x70) ←────
+                        │
+              SoftI2C GP16(SDA)/GP17(SCL)
+                    Grove 4 on Pico
 ```
+
+The TCA9548A's FET switches pass signals bidirectionally. By selecting
+a channel via I2C, the Pico can read the raw D0 state on GP16/GP17.
 
 ## MIDI Out Wiring
 
@@ -130,20 +135,57 @@ Pin numbering viewed from solder side of connector. Two 220-ohm resistors and a 
 
 ## Sensors
 
-Piezo sensors with digital trigger output, routed through I2C:
+Piezo sensors with A2D comparator boards (GND, VCC, AD0, D0). The D0 digital
+output is routed through the TCA9548A used as a digital signal multiplexer:
 
-| Sensor | TCA9548A Ch | PCF8574 Pin | Default Note |
-|--------|-------------|-------------|-------------|
-| S1a | 0 | P0 | A4 (440 Hz) |
-| S1b | 0 | P1 | C5 (523 Hz) |
+- Each TCA9548A channel carries **2 sensor D0 lines**
+- SDA wire = sensor A (D0), SCL wire = sensor B (D0)
+- D0 is **active-low**: 0 = hit, 1 = idle
 
-Edit `SENSOR_MAP` in `firmware/main.py` to change note assignments.
+| Sensor | TCA Ch | Wire | Default Note |
+|--------|--------|------|-------------|
+| S1a | 0 | SDA | C4 (261 Hz) |
+| S1b | 0 | SCL | E4 (329 Hz) |
+| S2a | 1 | SDA | G4 (392 Hz) |
+| S2b | 1 | SCL | C5 (523 Hz) |
 
-Rising-edge detection with 50ms debounce. PCF8574 inputs are active-low (sensor trigger pulls pin LOW).
+Edit the `SENSORS` list in `firmware/main.py` to change note assignments or
+add more sensors.
+
+Rising-edge detection with 50ms debounce. On boot, a status report shows all
+configured sensors and their current state (IDLE/TRIGGERED).
 
 ### Adding more sensors
 
-The TCA9548A has 8 channels. Add more PCF8574 expanders on other channels for additional sensor pairs. Each PCF8574 provides 8 digital inputs.
+Each TCA9548A has 8 channels x 2 wires = 16 sensors. Supports daisy-chaining
+**2 hubs** on the same I2C bus for up to **32 sensors**.
+
+To add a sensor pair on the first hub:
+
+1. Connect sensor A D0 → SDA wire on a new TCA channel
+2. Connect sensor B D0 → SCL wire on the same channel
+3. Add entries to `SENSORS` in `firmware/main.py`:
+   ```python
+   (0x70, 2, 0, "E5"),    # Hub 1, Ch 2, sensor A
+   (0x70, 2, 1, "G5"),    # Hub 1, Ch 2, sensor B
+   ```
+4. Redeploy: `python install.py --firmware-only`
+
+### Daisy-chaining a second hub
+
+1. Set A0 HIGH on the second TCA9548A board (address becomes 0x71)
+2. Connect SDA/SCL/VCC/GND in parallel with the first hub
+3. Add `0x71` to `HUB_ADDRESSES` in `firmware/main.py`
+4. Add sensor entries with `0x71`:
+   ```python
+   HUB_ADDRESSES = [0x70, 0x71]
+
+   SENSORS = [
+       ...
+       (0x71, 0, 0, "A4"),    # Hub 2, Ch 0, sensor A
+       (0x71, 0, 1, "B4"),    # Hub 2, Ch 0, sensor B
+   ]
+   ```
 
 ## Disk Space
 
